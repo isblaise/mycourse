@@ -6,6 +6,7 @@ const { authenticateToken } = require('../middleware/auth');
 
 router.post('/register', authController.register);
 router.post('/login', authController.login);
+router.post('/admin/login', authController.adminLogin);
 router.post('/change/password', authenticateToken, authController.changePassword);
 router.get('/user', authenticateToken, authController.getUserData);
 router.put('/update', authenticateToken, authController.updateUser);

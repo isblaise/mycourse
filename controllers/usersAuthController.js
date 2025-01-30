@@ -1,126 +1,347 @@
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
-const con = require('../config/db'); // Assuming you have a database configuration file
+const db = require('../config/db'); // Assuming you have a database configuration file
 
 
-
-
-  exports.register = async (req, res) => {
+exports.register = async (req, res) => {
+    let connection;
     try {
-      const { name, adresse,phone ,email, password,  } = req.body;
-      if (!name || !adresse || !phone || !email || !password) {
-        return res.status(400).json({ error: 'Tous les champs sont requis' });
-      }
-      const userCheckQuery = `SELECT * FROM users WHERE email = ?`;
-      const [existingUser] = await con.promise().query(userCheckQuery, [email]);
-      if (existingUser.length > 0) {
-        return res.status(409).json({ error: 'Un utilisateur avec cet email existe déjà' });
-      }
-      const hashedPassword = await bcrypt.hash(password, 10);
-      const insertUserQuery = `INSERT INTO users (name, adresse, phone, email, password) VALUES (?, ?, ?,?,?)`; 
-      await con.promise().query(insertUserQuery, [name, adresse,phone ,email, hashedPassword]);
-        res.status(201).json({ message: 'Utilisateur enregistré avec succès' });
-    } catch (error) {
-      console.error('Erreur lors de l\'enregistrement :', error);
-      res.status(500).json({ error: 'Erreur interne du serveur' });
-    }
-  };
-  
- 
-    exports.login = async (req, res) => {
-    const { email, password } = req.body;
-    const sql = `SELECT * FROM users WHERE email = ?`;
-    con.query(sql, [email], (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Erreur du serveur' });
-      }
-      if (results.length === 0) {
-        return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
-      }
-      const user = results[0];
-      bcrypt.compare(password, user.password, (err, isMatch) => {
-        if (err) {
-          return res.status(500).json({ error: 'Erreur du serveur' });
-        } 
-        if (!isMatch) {
-          return res.status(401).json({ error: 'Email ou mot de passe incorrect' });
+        const { name, adresse, phone, email, password } = req.body;
+        
+        if (!name || !adresse || !phone || !email || !password) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'Tous les champs sont requis' 
+            });
         }
-        const token = jwt.sign({ id: user.id, email: user.email }, 'secret_key', { expiresIn: '1h' });
-        res.status(200).json({ message: 'Connexion réussie', token });
-      });
-    });
-  };
 
-// get user data 
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const [existingUsers] = await connection.query(
+            'SELECT id FROM users WHERE email = ?', 
+            [email]
+        );
+
+        if (existingUsers.length > 0) {
+            await connection.rollback();
+            return res.status(409).json({
+                success: false,
+                message: 'Cet email existe déjà'
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+        const [result] = await connection.query(
+            'INSERT INTO users (name, adresse, phone, email, password) VALUES (?, ?, ?, ?, ?)',
+            [name, adresse, phone, email, hashedPassword]
+        );
+
+        await connection.commit();
+        res.status(201).json({
+            success: true,
+            message: 'Inscription réussie',
+            userId: result.insertId
+        });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error('Erreur inscription:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur serveur'
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+exports.login = async (req, res) => {
+    let connection;
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email et mot de passe requis'
+            });
+        }
+
+        connection = await db.getConnection();
+        const [users] = await connection.query(
+            'SELECT * FROM users WHERE email = ?',
+            [email]
+        );
+
+        if (users.length === 0) {
+            return res.status(401).json({
+                success: false,
+                message: 'Identifiants invalides'
+            });
+        }
+
+        const isValidPassword = await bcrypt.compare(password, users[0].password);
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                message: 'Identifiants invalides'
+            });
+        }
+
+        const token = jwt.sign(
+            { id: users[0].id },
+            'secret_key',
+            { expiresIn: '70d' }
+        );
+
+        res.json({
+            success: true,
+            message: 'Connexion réussie',
+            token,
+            user: {
+                id: users[0].id,
+                name: users[0].name,
+                email: users[0].email
+            }
+        });
+
+    } catch (error) {
+        console.error('Erreur connexion:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur serveur'
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+exports.adminLogin = async (req, res) => {
+    let connection;
+    try {
+        const { email, password } = req.body;
+
+        if (!email || !password) {
+            return res.status(400).json({
+                success: false,
+                message: 'Email et mot de passe requis'
+            });
+        }
+
+        connection = await db.getConnection();
+        const [users] = await connection.query(
+            'SELECT * FROM users WHERE email = ? AND role = "admin"',
+            [email]
+        );
+
+        if (users.length === 0) {
+            return res.status(403).json({
+                success: false,
+                message: 'Accès non autorisé'
+            });
+        }
+
+        const isValidPassword = await bcrypt.compare(password, users[0].password);
+        if (!isValidPassword) {
+            return res.status(401).json({
+                success: false,
+                message: 'Identifiants invalides'
+            });
+        }
+
+        const token = jwt.sign(
+            { 
+                id: users[0].id,
+                role: users[0].role 
+            },
+            'secret_key',
+            { expiresIn: '24h' }
+        );
+
+        res.json({
+            success: true,
+            message: 'Connexion administrateur réussie',
+            token,
+            admin: {
+                id: users[0].id,
+                name: users[0].name,
+                email: users[0].email,
+                role: users[0].role
+            }
+        });
+
+    } catch (error) {
+        console.error('Erreur connexion admin:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur serveur'
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+
+
+
+exports.changePassword = async (req, res) => {
+    let connection;
+    try {
+        const { userId, currentPassword, newPassword } = req.body;
+
+        if (!userId || !currentPassword || !newPassword) {
+            return res.status(400).json({
+                success: false,
+                message: 'Tous les champs sont requis'
+            });
+        }
+
+        connection = await db.getConnection();
+        await connection.beginTransaction();
+
+        const [users] = await connection.query(
+            'SELECT * FROM users WHERE id = ?',
+            [userId]
+        );
+
+        if (users.length === 0) {
+            await connection.rollback();
+            return res.status(404).json({
+                success: false,
+                message: 'Utilisateur non trouvé'
+            });
+        }
+
+        const isValidPassword = await bcrypt.compare(currentPassword, users[0].password);
+        if (!isValidPassword) {
+            await connection.rollback();
+            return res.status(401).json({
+                success: false,
+                message: 'Mot de passe actuel incorrect'
+            });
+        }
+
+        const hashedNewPassword = await bcrypt.hash(newPassword, 10);
+        await connection.query(
+            'UPDATE users SET password = ? WHERE id = ?',
+            [hashedNewPassword, userId]
+        );
+
+        await connection.commit();
+        res.json({
+            success: true,
+            message: 'Mot de passe mis à jour'
+        });
+
+    } catch (error) {
+        if (connection) await connection.rollback();
+        console.error('Erreur mise à jour mdp:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Erreur serveur'
+        });
+    } finally {
+        if (connection) connection.release();
+    }
+};
+   
  
-    exports.getUserData = async (req, res) => {
-    const userId = req.user.id; // ID extrait du token JWT
-  
-    const sql = `SELECT * FROM users WHERE id = ?`;
-    con.query(sql, [userId], (err, results) => {
-      if (err) {
-        return res.status(500).json({ error: 'Erreur serveur' });
+exports.getUserData = async (req, res) => {
+  let connection;
+  try {
+      const userId = req.user.id;
+      
+      connection = await db.getConnection();
+      const [users] = await connection.query(
+          'SELECT * FROM users WHERE id = ?',
+          [userId]
+      );
+
+      if (users.length === 0) { 
+          return res.status(404).json({
+              success: false,
+              message: 'Utilisateur non trouvé'
+          });
       }
-      if (results.length === 0) {
-        return res.status(404).json({ error: 'Utilisateur non trouvé' });
+
+      res.json({
+          success: true,
+          user: users[0]
+      });
+
+  } catch (error) {
+      console.error('Erreur récupération données:', error);
+      res.status(500).json({
+          success: false,
+          message: 'Erreur serveur'
+      });
+  } finally {
+      if (connection) connection.release();
+  }
+};
+
+exports.updateUser = async (req, res) => {
+  let connection;
+  try {
+      const userId = req.user.id;
+      const { name, adresse, phone, email } = req.body;
+
+      if (!name || !adresse || !phone || !email) {
+          return res.status(400).json({
+              success: false,
+              message: 'Tous les champs sont requis'
+          });
       }
-      res.json(results[0]); // Retourne les informations de l'utilisateur
-    });
-  };
-  
-  exports.updateUser = async (req, res) => {
-    const userId = req.user.id; // ID extrait du token JWT
-    const { name, adresse, phone, email } = req.body;
-  
-    try {
-      const updateUserQuery = `
-        UPDATE users 
-        SET name = ?, adresse = ?, phone = ?, email = ? 
-        WHERE id = ?
-      `;
-  
-      const [result] = await con.promise().query(updateUserQuery, [name, adresse, phone, email, userId]);
-  
+
+      connection = await db.getConnection();
+      await connection.beginTransaction();
+
+      // Vérifier si l'email existe déjà pour un autre utilisateur
+      const [existingUsers] = await connection.query(
+          'SELECT id FROM users WHERE email = ? AND id != ?',
+          [email, userId]
+      );
+
+      if (existingUsers.length > 0) {
+          await connection.rollback();
+          return res.status(409).json({
+              success: false,
+              message: 'Cet email est déjà utilisé'
+          });
+      }
+
+      // Mise à jour des informations
+      const [result] = await connection.query(
+          `UPDATE users 
+           SET name = ?, adresse = ?, phone = ?, email = ? 
+           WHERE id = ?`,
+          [name, adresse, phone, email, userId]
+      );
+
       if (result.affectedRows === 0) {
-        return res.status(404).json({ error: 'Utilisateur non trouvé' });
+          await connection.rollback();
+          return res.status(404).json({
+              success: false,
+              message: 'Utilisateur non trouvé'
+          });
       }
-  
-      res.status(200).json({ message: 'Informations utilisateur mises à jour avec succès' });
-    } catch (error) {
-      console.error('Erreur lors de la mise à jour :', error);
-      res.status(500).json({ error: 'Erreur interne du serveur' });
-    }
-  };
 
+      await connection.commit();
+      res.json({
+          success: true,
+          message: 'Profil mis à jour avec succès'
+      });
 
-  // change password 
-
-  exports.changePassword = async (req, res) => {
-    const userId = req.user.id; // ID extrait du token JWT
-    const { currentPassword, newPassword } = req.body;
-  
-    try {
-      const sql = `SELECT * FROM users WHERE id = ?`;   
-      const [user] = await con.promise().query(sql, [userId]);
-  
-      if (user.length === 0) {
-        return res.status(404).json({ error: 'Utilisateur non trouvé' });
-      }
-  
-      const isMatch = await bcrypt.compare(currentPassword, user[0].password);
-      if (!isMatch) {       
-        return res.status(401).json({ error: 'Mot de passe actuel incorrect' });
-      }
-      const hashedNewPassword = await bcrypt.hash(newPassword, 10);
-      const updatePasswordQuery = `UPDATE users SET password = ? WHERE id = ?`;
-      await con.promise().query(updatePasswordQuery, [hashedNewPassword, userId]);
-  
-      res.status(200).json({ message: 'Mot de passe mis à jour avec succès' });     
-    } catch (error) {
-      console.error('Erreur lors de la mise à jour du mot de passe :', error);
-      res.status(500).json({ error: 'Erreur interne du serveur' });
-    }
-  };
-  
+  } catch (error) {
+      if (connection) await connection.rollback();
+      console.error('Erreur mise à jour profil:', error);
+      res.status(500).json({
+          success: false,
+          message: 'Erreur serveur'
+      });
+  } finally {
+      if (connection) connection.release();
+  }
+};
 
   

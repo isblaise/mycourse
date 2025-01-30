@@ -14,12 +14,17 @@ const storage = multer.diskStorage({
   }
 });
 
+
+
 const upload = multer({ storage: storage });
 
 router.post('/register', upload.fields([{ name: 'profilePhoto' }, { name: 'documentPhoto' }]), shopAuthController.registerStore);
 router.post('/login', shopAuthController.loginStore);
-router.get('/shop', authenticateToken, shopAuthController.getShopData);
+router.get('/shop', authenticateToken, shopAuthController.getStoreData);
 router.get('/list', shopAuthController.getShopList);
+router.get('/list/verified', shopAuthController.getShopListVerified);
+router.patch('/shops/:id/status',authenticateToken, shopAuthController.updateStoreStatus);
 router.get('/latest', shopAuthController.getLatestShops);
+router.post('/logout', shopAuthController.logoutStore);
 
 module.exports = router;

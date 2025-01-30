@@ -1,13 +1,42 @@
 const mysql = require('mysql2');
-const con =mysql.createConnection({
-    host:'localhost',user:'root', password:'',database: 'mycourse_bd'
+
+
+const pool = mysql.createPool({
+    host: 'localhost',         
+    user: 'root',              
+    password: '',              
+    database: 'mycourse_bd',   
+    waitForConnections: true, 
+    connectionLimit: 10,       
+    queueLimit: 0            
 });
 
-con.connect((err)=>{
-    if(err){
-        console.error(err.stack)
+
+const promisePool = pool.promise();
+
+
+pool.on('acquire', (connection) => {
+    console.log(`Connexion acquise : ID ${connection.threadId}`);
+});
+
+pool.on('release', (connection) => {
+    console.log(`Connexion libérée : ID ${connection.threadId}`);
+});
+
+pool.on('enqueue', () => {
+    console.warn('Toutes les connexions sont utilisées, une requête est en attente...');
+});
+
+
+(async () => {
+    try {
+        console.log('Test de connexion initial...');
+        const connection = await promisePool.getConnection();
+        console.log('Connexion réussie :', connection.threadId);
+        connection.release(); 
+    } catch (err) {
+        console.error('Erreur lors de la connexion initiale :', err.message);
     }
-    console.log("Connecter")
-});
+})();
 
-module.exports = con;
+module.exports = promisePool;
